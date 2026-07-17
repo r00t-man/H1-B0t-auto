@@ -1,0 +1,14 @@
+# Секреты и персональные данные — никогда не коммитить
+.env
+bindings.json
+state/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# OS/editor
+.DS_Store
+*.swp

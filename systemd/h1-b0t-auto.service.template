@@ -1,0 +1,18 @@
+[Unit]
+Description=H1-B0t-auto — H1cloud + Remnawave management bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{BOT_DIR}}
+ExecStart={{BOT_DIR}}/venv/bin/python {{BOT_DIR}}/bot.py
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH={{BOT_DIR}}/venv/bin:/usr/bin:/bin
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
