@@ -154,21 +154,39 @@ sudo bash install.sh
 
 Один процесс, сырые HTTP-запросы к Telegram Bot API через `requests` (без `python-telegram-bot`/`aiogram`) — long-polling `getUpdates` + периодические фоновые проверки в том же цикле. Стейт (курсоры каналов, флаги автоклика, бэкапы перевыпущенных ключей) — плоские файлы в `state/`, без базы данных.
 
-```
-bot.py               — точка входа
-h1bot/
-  config.py          — .env + bindings.json → Config с feature-флагами
-  state.py           — файловый key-value стейт
-  telegram.py        — обёртка над Bot API
-  h1cloud_client.py  — H1cloud Client API v1
-  h1cloud_pelican.py — H1cloud Pelican API (legacy)
-  h1cloud_browser.py — Playwright-автоматизация «Создать новый конфиг»
-  remnawave_client.py— минимальный клиент Remnawave (host/config-profile/node)
-  gateway_sync.py     — синхронизация CDN-домена + REALITY-ключей по bindings
-  channel_watch.py    — мониторинг t.me/h1cloud_status + автоклик
-  keyboards.py / handlers.py — меню и роутинг callback'ов (паттерн ask/go)
-  app.py              — главный цикл
-  setup_wizard.py      — интерактивный установщик
+```text
+H1-B0t-auto/
+├── bot.py                 точка входа
+├── install.sh             установщик: venv, зависимости, systemd, мастер настройки
+├── uninstall.sh           деинсталлятор: сервис/venv/секреты/папка целиком
+├── requirements.txt       requests, playwright
+├── .env.example           образец конфига, с комментарием под каждую переменную
+├── bindings.example.json  образец привязок h1cloud-сервер ↔ Remnawave-хост
+│
+├── systemd/
+│   └── h1-b0t-auto.service.template
+│
+├── tests/
+│   └── test_config.py       assert-тесты конфига и feature-флагов, без сети
+│
+└── h1bot/
+    ├── config.py            .env + bindings.json → Config с feature-флагами
+    ├── state.py             файловый key-value стейт (без БД)
+    ├── telegram.py          тонкая обёртка над Bot API
+    ├── http_utils.py        retry-обёртка над requests (h1cloud WAF отдаёт 403 на легитимные запросы)
+    ├── notify.py            рассылка админам + cross-notify между ними
+    │
+    ├── h1cloud_client.py    H1cloud Client API v1 — серверы/метрики/питание/баланс/REALITY
+    ├── h1cloud_pelican.py   H1cloud Pelican API — legacy, для аккаунтов без Client API
+    ├── h1cloud_browser.py   Playwright: headless-клик «Создать новый конфиг» (нет API)
+    ├── remnawave_client.py  минимальный клиент Remnawave (host/config-profile/node)
+    ├── gateway_sync.py      синхронизация CDN-домена + REALITY-ключей по bindings
+    ├── channel_watch.py     мониторинг t.me/h1cloud_status + автоклик
+    │
+    ├── keyboards.py         инлайн-клавиатуры — все кнопки видны всегда
+    ├── handlers.py          роутинг callback'ов, паттерн `X_ask` → confirm → `X_go`
+    ├── app.py               главный цикл: long-polling + фоновые проверки
+    └── setup_wizard.py      интерактивный мастер настройки .env/bindings.json
 ```
 
 ## Безопасность
