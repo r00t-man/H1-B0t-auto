@@ -35,13 +35,18 @@ Telegram-бот для управления парком серверов [h1clo
 ## Установка
 
 ```bash
-git clone git@github.com:r00t-man/H1-B0t-auto.git
+curl -L https://github.com/r00t-man/H1-B0t-auto/archive/refs/heads/main.tar.gz -o h1bot.tar.gz
+mkdir H1-B0t-auto && tar -xzf h1bot.tar.gz -C H1-B0t-auto --strip-components=1
 cd H1-B0t-auto
 sudo bash install.sh
 ```
 
 > [!TIP]
-> Если на сервере не настроен SSH-ключ для GitHub, клонируй по HTTPS вместо SSH — работает точно так же, ключ не нужен:
+> Репозиторий публичный — ни SSH-ключ, ни `git` не нужны, скачивание работает на чистом сервере из коробки. Если `curl` недоступен, используй `wget`:
+> ```bash
+> wget -O h1bot.tar.gz https://github.com/r00t-man/H1-B0t-auto/archive/refs/heads/main.tar.gz
+> ```
+> Если предпочитаешь `git clone` — тоже подойдёт, по HTTPS ключ не требуется:
 > ```bash
 > git clone https://github.com/r00t-man/H1-B0t-auto.git
 > ```
