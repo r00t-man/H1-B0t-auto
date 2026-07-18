@@ -14,87 +14,155 @@ set -e
 
 BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="h1-b0t-auto"
+TOTAL_STEPS=5
+CURRENT_STEP=0
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'; BOLD='\033[1m'; NC='\033[0m'
-info()  { echo -e "${GREEN}[*]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[!]${NC} $1"; }
-fail()  { echo -e "${RED}[x]${NC} $1"; exit 1; }
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
 
+info()    { echo -e "${GREEN}[*]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[!]${NC} $1"; }
+fail()    { echo -e "${RED}[x]${NC} $1"; exit 1; }
+success() { echo -e "  ${GREEN}✔${NC} $1"; }
+
+rule() { echo -e "${MAGENTA}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
+
+# spin PID "надпись" — крутит спиннер, пока фоновый процесс с этим PID жив
 spin() {
-  # spin "надпись" -- крутит спиннер, пока фоновый процесс с этим PID жив
   local pid=$1 label=$2 frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏' i=0
   while kill -0 "$pid" 2>/dev/null; do
     i=$(((i + 1) % ${#frames}))
-    printf "\r${CYAN}%s${NC} %s" "${frames:$i:1}" "$label"
+    printf "\r  ${CYAN}%s${NC} %s" "${frames:$i:1}" "$label"
     sleep 0.1
   done
-  printf "\r%*s\r" "$((${#label} + 4))" ""
+  printf "\r%*s\r" "$((${#label} + 6))" ""
+}
+
+# draw_bar N TOTAL — полоска прогресса вида [██████░░░░] 60%
+# (репит через printf '%.0s', не tr — некоторые tr бьют многобайтовый UTF-8 на отдельные байты и портят вывод)
+draw_bar() {
+  local n=$1 total=$2 width=28
+  local filled=$(( n * width / total )) empty
+  empty=$(( width - filled ))
+  local bar=""
+  [ "$filled" -gt 0 ] && bar+=$(printf '█%.0s' $(seq 1 "$filled"))
+  [ "$empty" -gt 0 ] && bar+=$(printf '░%.0s' $(seq 1 "$empty"))
+  printf "  ${CYAN}[%s]${NC} ${BOLD}%3d%%${NC}\n" "$bar" "$(( n * 100 / total ))"
+}
+
+# step "заголовок" "зачем это нужно, понятным языком" — заголовок шага + бар
+step() {
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+  echo ""
+  rule
+  echo -e "${BOLD}Шаг $CURRENT_STEP/$TOTAL_STEPS${NC} — $1"
+  draw_bar "$CURRENT_STEP" "$TOTAL_STEPS"
+  [ -n "$2" ] && echo -e "  ${YELLOW}ℹ${NC}  ${DIM}$2${NC}"
+  echo ""
+}
+
+# run_bg "лог-файл" "надпись спиннера" -- команда... — фон + спиннер + проверка кода возврата
+run_bg() {
+  local logfile=$1 label=$2; shift 2
+  "$@" >"$logfile" 2>&1 &
+  local pid=$!
+  spin "$pid" "$label"
+  wait "$pid"
 }
 
 if [ "$EUID" -ne 0 ]; then
   fail "Запусти установщик от root (sudo bash install.sh)."
 fi
 
-info "Каталог бота: $BOT_DIR"
+echo ""
+echo -e "${CYAN}${BOLD}   🛸  H1-B0t-auto — установка${NC}"
+echo -e "${DIM}   Каталог: $BOT_DIR${NC}"
 
 # ── 1. Системные пакеты ─────────────────────────────────────────────────
-info "Устанавливаю python3/venv/pip..."
 if command -v apt-get >/dev/null 2>&1; then
-  apt-get update -qq
-  apt-get install -y -qq python3 python3-venv python3-pip >/dev/null
+  PKG_LOG=/tmp/h1bot-install-packages.log
+  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
+  step "Системные пакеты (python3, venv, pip)" \
+    "Это стандартные пакеты из официального репозитория дистрибутива — без них любой Python-скрипт на сервере не запустится, ничего специфичного для бота тут нет."
+  if ! run_bg "$PKG_LOG" "apt-get update + install python3/venv/pip..." bash -c "apt-get update -qq && apt-get install -y -qq python3 python3-venv python3-pip"; then
+    fail "Не удалось поставить системные пакеты — смотри лог: $PKG_LOG"
+  fi
 elif command -v dnf >/dev/null 2>&1; then
-  dnf install -y -q python3 python3-pip python3-virtualenv
+  step "Системные пакеты (python3, venv, pip)" "Стандартные пакеты дистрибутива, нужны для запуска Python."
+  PKG_LOG=/tmp/h1bot-install-packages.log
+  if ! run_bg "$PKG_LOG" "dnf install python3/pip/virtualenv..." dnf install -y -q python3 python3-pip python3-virtualenv; then
+    fail "Не удалось поставить системные пакеты — смотри лог: $PKG_LOG"
+  fi
 elif command -v yum >/dev/null 2>&1; then
-  yum install -y -q python3 python3-pip python3-virtualenv
+  step "Системные пакеты (python3, venv, pip)" "Стандартные пакеты дистрибутива, нужны для запуска Python."
+  PKG_LOG=/tmp/h1bot-install-packages.log
+  if ! run_bg "$PKG_LOG" "yum install python3/pip/virtualenv..." yum install -y -q python3 python3-pip python3-virtualenv; then
+    fail "Не удалось поставить системные пакеты — смотри лог: $PKG_LOG"
+  fi
 else
   fail "Не нашёл apt-get/dnf/yum — установи python3, python3-venv, python3-pip вручную и перезапусти скрипт."
 fi
+success "Системные пакеты готовы"
 
-# ── 2. venv + зависимости ───────────────────────────────────────────────
+# ── 2. venv ──────────────────────────────────────────────────────────────
+step "Изолированное окружение (venv)" \
+  "venv — это отдельная песочница для Python-библиотек бота внутри его же папки, чтобы они не конфликтовали с другими программами на сервере. Ничего не трогает системный Python."
 if [ ! -d "$BOT_DIR/venv" ]; then
-  info "Создаю venv..."
   python3 -m venv "$BOT_DIR/venv"
+  success "venv создан в $BOT_DIR/venv"
+else
+  success "venv уже существует — переиспользую"
 fi
 
-info "Ставлю зависимости (requests, playwright)..."
-"$BOT_DIR/venv/bin/pip" install -q --upgrade pip
-"$BOT_DIR/venv/bin/pip" install -q -r "$BOT_DIR/requirements.txt"
+# ── 3. Python-зависимости ────────────────────────────────────────────────
+step "Библиотеки бота (requests, playwright)" \
+  "requests — обычные HTTP-запросы к Telegram/h1cloud/Remnawave API. playwright — headless-браузер, нужен ТОЛЬКО кнопке «Создать новый конфиг» (эмулирует клик в панели, там нет API для этого действия)."
+DEPS_LOG=/tmp/h1bot-install-deps.log
+if ! run_bg "$DEPS_LOG" "ставлю зависимости из requirements.txt..." "$BOT_DIR/venv/bin/pip" install -q --upgrade pip -r "$BOT_DIR/requirements.txt"; then
+  fail "Не удалось поставить Python-зависимости — смотри лог: $DEPS_LOG"
+fi
+success "Зависимости установлены"
 
-# ── 3. Интерактивный мастер настройки ───────────────────────────────────
+# ── интерактивный мастер настройки (без прогресс-бара — тут нужен ввод) ──
 if [ ! -f "$BOT_DIR/.env.example" ]; then
   fail ".env.example не найден рядом со скриптом — что-то не так с репозиторием."
 fi
-
-info "Запускаю мастер настройки..."
+echo ""
+rule
+echo -e "${BOLD}Мастер настройки${NC} — сейчас спросит токены/ключи и объяснит, зачем нужен каждый."
+echo -e "${DIM}Enter без ввода = пропустить пункт, потом можно дозаполнить вручную.${NC}"
+rule
+echo ""
 "$BOT_DIR/venv/bin/python3" "$BOT_DIR/h1bot/setup_wizard.py"
 
-# ── 4. Playwright/Chromium — только если настроена браузерная автоматизация ──
+# ── 4. Chromium для Playwright — только если настроена браузерная автоматизация ──
+step "Chromium для Playwright" \
+  "Нужен только кнопке «Создать новый конфиг» (браузерный клик в панели h1cloud). Если логин панели не задан — шаг просто пропускается, кнопка при нажатии подскажет, чего не хватает."
 if grep -q "^H1CLOUD_PANEL_LOGIN=.\+" "$BOT_DIR/.env" 2>/dev/null; then
-  info "Настроен логин панели — ставлю Chromium для Playwright (~300 МБ, один раз)..."
-  "$BOT_DIR/venv/bin/playwright" install --with-deps chromium >/tmp/h1bot-playwright.log 2>&1 &
-  spin $! "Chromium для Playwright..."
-  wait $! || warn "Не удалось поставить Chromium автоматически (лог: /tmp/h1bot-playwright.log) — кнопка «Создать новый конфиг» не будет работать, пока не выполнишь: $BOT_DIR/venv/bin/playwright install --with-deps chromium"
+  CHROME_LOG=/tmp/h1bot-install-playwright.log
+  if run_bg "$CHROME_LOG" "скачиваю Chromium (~300 МБ, один раз)..." "$BOT_DIR/venv/bin/playwright" install --with-deps chromium; then
+    success "Chromium установлен"
+  else
+    warn "Не удалось поставить Chromium автоматически (лог: $CHROME_LOG) — выполни вручную: $BOT_DIR/venv/bin/playwright install --with-deps chromium"
+  fi
 else
-  info "Логин панели (H1CLOUD_PANEL_LOGIN/PASSWORD) не задан — пропускаю установку Chromium. Кнопка «Создать новый конфиг» в боте всё равно будет видна, но при нажатии подскажет, что дозаполнить."
+  success "Логин панели не задан — пропущено (это нормально, не ошибка)"
 fi
 
 # ── 5. systemd ───────────────────────────────────────────────────────────
-info "Настраиваю systemd-сервис ${SERVICE_NAME}..."
+step "systemd-сервис ${SERVICE_NAME}" \
+  "Чтобы бот запускался сам при старте сервера и сам перезапускался, если упадёт (Restart=always) — без этого пришлось бы держать терминал открытым вручную."
 sed "s#{{BOT_DIR}}#${BOT_DIR}#g" "$BOT_DIR/systemd/h1-b0t-auto.service.template" > "/etc/systemd/system/${SERVICE_NAME}.service"
-
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null
 systemctl restart "$SERVICE_NAME"
-
 sleep 2
 if systemctl is-active --quiet "$SERVICE_NAME"; then
-  info "Сервис запущен."
+  success "Сервис запущен"
 else
   warn "Сервис не запустился — смотри: journalctl -u $SERVICE_NAME -n 50"
 fi
 
-
-# ── 6. Итоговый чек-лист: что настроено для полного функционала ─────────
+# ── Итоговый чек-лист: что настроено для полного функционала ────────────
 ENV_FILE="$BOT_DIR/.env"
 BINDINGS_FILE="$BOT_DIR/bindings.json"
 
@@ -145,11 +213,11 @@ else
   echo -e "${YELLOW}${BOLD}     покажут подсказку, что и в каком файле дозаполнить.${NC}"
 fi
 echo ""
-echo "════════════════════════════════════════════════════════════════════"
-echo " Логи:               journalctl -u $SERVICE_NAME -f"
+rule
+echo " Логи бота:           journalctl -u $SERVICE_NAME -f"
 echo " Статус:              systemctl status $SERVICE_NAME"
 echo " Перезапуск:          systemctl restart $SERVICE_NAME"
 echo " Ручная донастройка:  $BOT_DIR/.env  и  $BOT_DIR/bindings.json"
 echo "                       (после правки — systemctl restart $SERVICE_NAME)"
 echo " Мастер повторно:     $BOT_DIR/venv/bin/python3 $BOT_DIR/h1bot/setup_wizard.py"
-echo "════════════════════════════════════════════════════════════════════"
+rule

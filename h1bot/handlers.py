@@ -5,6 +5,8 @@ callback `X_ask:{arg}` рендерит предупреждение с кноп
 """
 import json
 import logging
+import shlex
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,30 +21,41 @@ from .telegram import TelegramClient
 
 logger = logging.getLogger("h1bot.handlers")
 
+BOT_DIR = Path(__file__).resolve().parent.parent
+SERVICE_NAME = "h1-b0t-auto"
+
 HELP_TEXT = (
-    "<b>H1-B0t-auto</b> — управление h1cloud-серверами из Telegram.\n\n"
+    "🛸 <b>H1-B0t-auto</b> — управление h1cloud-серверами из Telegram.\n\n"
     "📋 <b>Мои серверы</b> — список, живые метрики, питание, обновление ядра Xray, продление аренды.\n"
-    "🌐 <b>Синхронизация CDN-гейтвея</b> с Remnawave — проверка/применение нового домена, "
-    "перевыпуск и точечное применение REALITY-ключей.\n"
-    "🤖 <b>Автоклик</b> — при появлении в публичном канале провайдера поста о восстановлении доступа "
-    "бот сам нажимает «Создать новый конфиг» и применяет новый домен.\n\n"
-    "Все кнопки в меню видны сразу. Если для какой-то не хватает данных — при нажатии "
-    "бот покажет, чего именно и в каком файле не хватает.\n\n"
-    "<b>Что где настраивается (файл .env):</b>\n"
-    "• 📋 Серверы / 💰 Баланс / ⏻ питание / 🧬 ядро Xray / 💳 продление / 🔑 REALITY-перевыпуск\n"
-    "  ↳ <code>H1CLOUD_CLIENT_API_KEY</code> (my.h1cloud.net → my.h1cloud.net/api-docs)\n"
-    "• 🗄 Pelican-панель (устаревший API)\n"
-    "  ↳ <code>H1CLOUD_PELICAN_API_TOKEN</code> (panel.h1cloud.net)\n"
-    "• 🌐 Создать новый конфиг / 🤖 Автоклик\n"
-    "  ↳ <code>H1CLOUD_PANEL_LOGIN</code> + <code>H1CLOUD_PANEL_PASSWORD</code>\n"
-    "• 🌐 CDN-домен / 🩺 Диагностика / 📥 Применить REALITY-ключ\n"
-    "  ↳ <code>REMNAWAVE_API_URL</code> + <code>REMNAWAVE_API_TOKEN</code>\n\n"
-    "<b>Привязка конкретного сервера (файл bindings.json):</b>\n"
-    "• <code>remnawave_host_uuid</code> — для CDN-sync/диагностики/автоклика\n"
-    "• <code>remnawave_profile_uuid</code> + <code>remnawave_node_uuid</code> + <code>reality_inbound_tag</code> "
-    "— для перевыпуска/применения REALITY-ключей\n\n"
-    "Проще всего заполнить всё мастером: <code>python3 h1bot/setup_wizard.py</code> — "
-    "шаг [6/7] сам подтянет списки серверов/хостов и предложит выбрать привязки, не вводя UUID руками."
+    "🌐 <b>CDN-гейтвей</b> — проверка/применение нового домена, перевыпуск и применение REALITY-ключей.\n"
+    "🤖 <b>Автоклик</b> — при посте о восстановлении доступа в канале провайдера бот сам жмёт «Создать новый конфиг».\n\n"
+    "Все кнопки видны сразу. Если для какой-то не хватает данных — при нажатии бот покажет, "
+    "чего и в каком файле не хватает.\n\n"
+    "<blockquote expandable>"
+    "<b>Что где настраивается — файл .env:</b>\n\n"
+    "• Серверы / Баланс / питание / ядро Xray / продление / REALITY-перевыпуск\n"
+    "<code>H1CLOUD_CLIENT_API_KEY</code>\n"
+    "(получить: my.h1cloud.net → /api-docs)\n\n"
+    "• Pelican-панель (устаревший API)\n"
+    "<code>H1CLOUD_PELICAN_API_TOKEN</code>\n\n"
+    "• Создать новый конфиг / Автоклик\n"
+    "<code>H1CLOUD_PANEL_LOGIN</code> + <code>H1CLOUD_PANEL_PASSWORD</code>\n\n"
+    "• CDN-домен / Диагностика / Применить REALITY-ключ\n"
+    "<code>REMNAWAVE_API_URL</code> + <code>REMNAWAVE_API_TOKEN</code>\n\n"
+    "<b>Привязка сервера — файл bindings.json:</b>\n"
+    "<pre>{\n"
+    '  "h1cloud_server_id": 123,\n'
+    '  "remnawave_host_uuid": "...",\n'
+    '  "remnawave_profile_uuid": "...",\n'
+    '  "remnawave_node_uuid": "...",\n'
+    '  "reality_inbound_tag": "..."\n'
+    "}</pre>\n"
+    "host_uuid — для CDN-sync/автоклика. profile/node/tag — для REALITY.\n\n"
+    "Проще всего заполнить мастером:\n<code>python3 h1bot/setup_wizard.py</code>\n"
+    "Шаг [6/7] сам подтянет списки серверов/хостов — выбираешь мышкой, UUID вводить не нужно."
+    "</blockquote>\n\n"
+    "🗑 <b>Удаление бота</b> — кнопка «Удалить бота» в главном меню, или в консоли сервера:\n"
+    "<code>sudo bash uninstall.sh</code>"
 )
 
 
@@ -83,12 +96,16 @@ class Context:
 
 def _config_error(tg: TelegramClient, chat_id, message_id, back_cb: str, title: str, items: list) -> None:
     """Красиво оформленное сообщение о нехватке настроек: что и в каком файле дозаполнить."""
-    lines = [f"⚠️ <b>{title}</b>", "", "Не хватает настроек для этой кнопки:"]
-    for what, where in items:
-        lines.append(f"• <b>{what}</b>\n  ↳ <code>{where}</code>")
-    lines += ["", "Заполни и перезапусти бота: <code>systemctl restart h1-b0t-auto</code>",
-              "Проще всего — мастером: <code>python3 h1bot/setup_wizard.py</code>"]
-    tg.edit_message(chat_id, message_id, "\n".join(lines), reply_markup=keyboards.keyboard([keyboards.kb_back(back_cb)]))
+    body = "\n\n".join(f"<b>{what}</b>\n<code>{where}</code>" for what, where in items)
+    text = (
+        f"⚠️ <b>{title}</b>\n\n"
+        f"<blockquote>{body}</blockquote>\n\n"
+        "Заполни и перезапусти бота:\n"
+        f"<code>systemctl restart {SERVICE_NAME}</code>\n\n"
+        "Проще всего — мастером:\n"
+        "<code>python3 h1bot/setup_wizard.py</code>"
+    )
+    tg.edit_message(chat_id, message_id, text, reply_markup=keyboards.keyboard([keyboards.kb_back(back_cb)]))
 
 
 def _regenerate_backup_path(server_id: int) -> Path:
@@ -243,8 +260,9 @@ def _route(ctx: Context, data: str, chat_id, message_id, user_id) -> None:
         server_id = data.split(":", 1)[1]
         tg.edit_message(
             chat_id, message_id,
-            "⚠️ <b>Опасный шаг.</b> Жёсткий рестарт ядра Xray, 2-3 минуты даунтайма. "
-            "Не вызывай без необходимости — сначала посмотри 🩺 диагностику, если она доступна.",
+            "🧬 <b>Обновление ядра Xray</b>\n\n"
+            "<blockquote>⚠️ Жёсткий рестарт ядра Xray, 2-3 минуты даунтайма.\n"
+            "Не вызывай без необходимости — сначала посмотри 🩺 диагностику, если она доступна.</blockquote>",
             reply_markup=keyboards.kb_confirm(f"xray_go:{server_id}", f"srv:{server_id}", "✅ Всё равно обновить"),
         )
         return
@@ -260,7 +278,8 @@ def _route(ctx: Context, data: str, chat_id, message_id, user_id) -> None:
         server_id = data.split(":", 1)[1]
         tg.edit_message(
             chat_id, message_id,
-            "💳 Продлить сервер на 30 дней? Спишутся реальные деньги с баланса аккаунта.",
+            "💳 <b>Продление на 30 дней</b>\n\n"
+            "<blockquote>Спишутся реальные деньги с баланса аккаунта h1cloud.</blockquote>",
             reply_markup=keyboards.kb_confirm(f"renew_go:{server_id}", f"srv:{server_id}"),
         )
         return
@@ -295,9 +314,10 @@ def _route(ctx: Context, data: str, chat_id, message_id, user_id) -> None:
         server_id = data.split(":", 1)[1]
         tg.edit_message(
             chat_id, message_id,
-            "🔑 <b>Необратимо.</b> Перевыпуск REALITY-ключей на стороне h1cloud — старый ключ умирает "
-            "СРАЗУ. Этот шаг только скачивает новый ключ и показывает fingerprint — сам он ничего "
-            "не меняет в Remnawave, для этого отдельная кнопка «Применить».",
+            "🔑 <b>Перевыпуск REALITY-ключей</b>\n\n"
+            "<blockquote>⚠️ Необратимо — старый ключ на стороне h1cloud умирает СРАЗУ.\n\n"
+            "Этот шаг только скачивает новый ключ и показывает fingerprint — сам он ничего "
+            "не меняет в Remnawave, для этого отдельная кнопка «Применить».</blockquote>",
             reply_markup=keyboards.kb_confirm(f"regen_go:{server_id}", f"srv:{server_id}", "✅ Перевыпустить"),
         )
         return
@@ -320,8 +340,10 @@ def _route(ctx: Context, data: str, chat_id, message_id, user_id) -> None:
         server_id = data.split(":", 1)[1]
         tg.edit_message(
             chat_id, message_id,
-            "📥 Применить последний скачанный REALITY-ключ в Remnawave? REALITY/XHTTP/WS на этом "
-            "сервере будут недоступны несколько минут во время рестарта ноды.",
+            "📥 <b>Применение REALITY-ключа</b>\n\n"
+            "<blockquote>Применить последний скачанный ключ в Remnawave?\n\n"
+            "REALITY/XHTTP/WS на этом сервере будут недоступны несколько минут во время "
+            "рестарта ноды.</blockquote>",
             reply_markup=keyboards.kb_confirm(f"apply_go:{server_id}", f"srv:{server_id}", "✅ Применить"),
         )
         return
@@ -343,8 +365,10 @@ def _route(ctx: Context, data: str, chat_id, message_id, user_id) -> None:
         server_id = data.split(":", 1)[1]
         tg.edit_message(
             chat_id, message_id,
-            "⚠️ <b>Необратимо.</b> Текущий whitelist/CDN-конфиг сервера умрёт СРАЗУ после нажатия. "
-            "Используй только если провайдер объявил ротацию/восстановление гейтвея.",
+            "🌐 <b>Новый конфиг в панели h1cloud</b>\n\n"
+            "<blockquote>⚠️ Необратимо — текущий whitelist/CDN-конфиг сервера умрёт СРАЗУ "
+            "после нажатия.\n\nИспользуй только если провайдер объявил ротацию/восстановление "
+            "гейтвея.</blockquote>",
             reply_markup=keyboards.kb_confirm(f"newcfg_go:{server_id}", f"srv:{server_id}", "✅ Всё равно создать"),
         )
         return
@@ -359,6 +383,31 @@ def _route(ctx: Context, data: str, chat_id, message_id, user_id) -> None:
         server_id = int(data.split(":", 1)[1])
         channel_watch.autoclick_set(server_id, not channel_watch.autoclick_enabled(server_id))
         _show_server(ctx, chat_id, message_id, server_id)
+        return
+
+    # ── полное удаление бота с сервера ──
+    if data == "uninstall_ask":
+        tg.edit_message(
+            chat_id, message_id,
+            "🗑 <b>Полное удаление H1-B0t-auto</b>\n\n"
+            "<blockquote>⚠️ Необратимо. Будет сделано:\n\n"
+            "• остановлен и убран systemd-сервис\n"
+            "• удалены venv и кэш Chromium\n"
+            "• удалены .env и bindings.json — реальные API-ключи и пароли\n"
+            "• снесена вся папка бота на сервере\n\n"
+            "Отменить после нажатия «Удалить» будет нельзя.</blockquote>",
+            reply_markup=keyboards.kb_confirm("uninstall_go", "menu", "🗑 Удалить всё"),
+        )
+        return
+    if data == "uninstall_go":
+        tg.edit_message(chat_id, message_id, "🗑 Удаляю бота с сервера... Это последнее сообщение — процесс сейчас остановится.")
+        cmd = (
+            f"sleep 2 && systemctl stop {SERVICE_NAME} && systemctl disable {SERVICE_NAME} && "
+            f"rm -f /etc/systemd/system/{SERVICE_NAME}.service && systemctl daemon-reload && "
+            f"rm -rf {shlex.quote(str(BOT_DIR))}"
+        )
+        with open("/tmp/h1bot-uninstall.log", "ab") as log:
+            subprocess.Popen(["bash", "-c", cmd], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
         return
 
     # ── legacy Pelican API ──

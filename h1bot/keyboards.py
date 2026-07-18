@@ -11,6 +11,7 @@ def kb_main_menu(config) -> dict:
         [button("💰 Баланс", "balance")],
         [button("🗄 Pelican-панель (устаревший API)", "pelican_list")],
         [button("📖 Помощь", "help")],
+        [button("🗑 Удалить бота", "uninstall_ask")],
     ]
     return keyboard(rows)
 
