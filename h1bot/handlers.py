@@ -22,11 +22,27 @@ logger = logging.getLogger("h1bot.handlers")
 HELP_TEXT = (
     "<b>H1-B0t-auto</b> — управление h1cloud-серверами из Telegram.\n\n"
     "📋 <b>Мои серверы</b> — список, живые метрики, питание, обновление ядра Xray, продление аренды.\n"
-    "🌐 <b>Синхронизация CDN-гейтвея</b> с Remnawave (если настроена привязка в bindings.json) — "
-    "проверка/применение нового домена, перевыпуск и точечное применение REALITY-ключей.\n"
+    "🌐 <b>Синхронизация CDN-гейтвея</b> с Remnawave — проверка/применение нового домена, "
+    "перевыпуск и точечное применение REALITY-ключей.\n"
     "🤖 <b>Автоклик</b> — при появлении в публичном канале провайдера поста о восстановлении доступа "
-    "бот сам нажимает «Создать новый конфиг» и применяет новый домен (нужны логин/пароль панели).\n\n"
-    "Настройка — файл <code>.env</code> в папке бота, привязки к Remnawave — <code>bindings.json</code>."
+    "бот сам нажимает «Создать новый конфиг» и применяет новый домен.\n\n"
+    "Все кнопки в меню видны сразу. Если для какой-то не хватает данных — при нажатии "
+    "бот покажет, чего именно и в каком файле не хватает.\n\n"
+    "<b>Что где настраивается (файл .env):</b>\n"
+    "• 📋 Серверы / 💰 Баланс / ⏻ питание / 🧬 ядро Xray / 💳 продление / 🔑 REALITY-перевыпуск\n"
+    "  ↳ <code>H1CLOUD_CLIENT_API_KEY</code> (my.h1cloud.net → my.h1cloud.net/api-docs)\n"
+    "• 🗄 Pelican-панель (устаревший API)\n"
+    "  ↳ <code>H1CLOUD_PELICAN_API_TOKEN</code> (panel.h1cloud.net)\n"
+    "• 🌐 Создать новый конфиг / 🤖 Автоклик\n"
+    "  ↳ <code>H1CLOUD_PANEL_LOGIN</code> + <code>H1CLOUD_PANEL_PASSWORD</code>\n"
+    "• 🌐 CDN-домен / 🩺 Диагностика / 📥 Применить REALITY-ключ\n"
+    "  ↳ <code>REMNAWAVE_API_URL</code> + <code>REMNAWAVE_API_TOKEN</code>\n\n"
+    "<b>Привязка конкретного сервера (файл bindings.json):</b>\n"
+    "• <code>remnawave_host_uuid</code> — для CDN-sync/диагностики/автоклика\n"
+    "• <code>remnawave_profile_uuid</code> + <code>remnawave_node_uuid</code> + <code>reality_inbound_tag</code> "
+    "— для перевыпуска/применения REALITY-ключей\n\n"
+    "Проще всего заполнить всё мастером: <code>python3 h1bot/setup_wizard.py</code> — "
+    "шаг [6/7] сам подтянет списки серверов/хостов и предложит выбрать привязки, не вводя UUID руками."
 )
 
 
@@ -63,6 +79,16 @@ class Context:
 
     def notify_other_admins(self, triggering_chat_id, text: str) -> None:
         notify_other_admins(self.tg, self.config.admin_ids, triggering_chat_id, text)
+
+
+def _config_error(tg: TelegramClient, chat_id, message_id, back_cb: str, title: str, items: list) -> None:
+    """Красиво оформленное сообщение о нехватке настроек: что и в каком файле дозаполнить."""
+    lines = [f"⚠️ <b>{title}</b>", "", "Не хватает настроек для этой кнопки:"]
+    for what, where in items:
+        lines.append(f"• <b>{what}</b>\n  ↳ <code>{where}</code>")
+    lines += ["", "Заполни и перезапусти бота: <code>systemctl restart h1-b0t-auto</code>",
+              "Проще всего — мастером: <code>python3 h1bot/setup_wizard.py</code>"]
+    tg.edit_message(chat_id, message_id, "\n".join(lines), reply_markup=keyboards.keyboard([keyboards.kb_back(back_cb)]))
 
 
 def _regenerate_backup_path(server_id: int) -> Path:
@@ -128,6 +154,68 @@ def _route(ctx: Context, data: str, chat_id, message_id, user_id) -> None:
     if data == "help":
         tg.edit_message(chat_id, message_id, HELP_TEXT, reply_markup=keyboards.keyboard([keyboards.kb_back()]))
         return
+
+    action = data.split(":", 1)[0]
+
+    if action in ("balance", "srv_list", "srv", "pwr", "xray_ask", "xray_go", "renew_ask", "renew_go", "regen_ask", "regen_go"):
+        if ctx.h1client is None:
+            _config_error(
+                tg, chat_id, message_id, "menu",
+                "H1cloud Client API не настроен",
+                [("H1cloud Client API key", ".env → H1CLOUD_CLIENT_API_KEY (получить: my.h1cloud.net → my.h1cloud.net/api-docs)")],
+            )
+            return
+
+    if action in ("pelican_list", "pelican_srv", "pelican_pwr"):
+        if ctx.pelican is None:
+            _config_error(
+                tg, chat_id, message_id, "menu",
+                "H1cloud Pelican API не настроен",
+                [("Pelican API token", ".env → H1CLOUD_PELICAN_API_TOKEN (panel.h1cloud.net, устаревший API)")],
+            )
+            return
+
+    if action in ("sync_check", "diag", "apply_ask", "apply_go"):
+        server_id = int(data.split(":")[1])
+        binding = ctx.config.binding_for(server_id)
+        needs_reality = action in ("apply_ask", "apply_go")
+        binding_ok = bool(binding and (binding.reality_apply_enabled if needs_reality else binding.gateway_sync_enabled))
+        if ctx.rw is None or not binding_ok:
+            missing = []
+            if ctx.rw is None:
+                missing.append(("Remnawave API", ".env → REMNAWAVE_API_URL и REMNAWAVE_API_TOKEN"))
+            if not binding_ok:
+                if needs_reality:
+                    missing.append((
+                        f"Привязка сервера #{server_id} к профилю/ноде REALITY",
+                        f"bindings.json → запись с h1cloud_server_id={server_id}: remnawave_profile_uuid, remnawave_node_uuid, reality_inbound_tag",
+                    ))
+                else:
+                    missing.append((
+                        f"Привязка сервера #{server_id} к Remnawave-хосту",
+                        f"bindings.json → запись с h1cloud_server_id={server_id}: remnawave_host_uuid",
+                    ))
+            _config_error(tg, chat_id, message_id, f"srv:{server_id}", "Не настроена интеграция с Remnawave для этого сервера", missing)
+            return
+
+    if action in ("newcfg_ask", "newcfg_go", "autoclick_toggle"):
+        server_id = int(data.split(":")[1])
+        if not ctx.config.browser_automation_enabled:
+            _config_error(
+                tg, chat_id, message_id, f"srv:{server_id}",
+                "Логин панели h1cloud не настроен",
+                [("Логин и пароль my.h1cloud.net", ".env → H1CLOUD_PANEL_LOGIN и H1CLOUD_PANEL_PASSWORD")],
+            )
+            return
+        if action == "autoclick_toggle":
+            binding = ctx.config.binding_for(server_id)
+            if not (binding and binding.gateway_sync_enabled):
+                _config_error(
+                    tg, chat_id, message_id, f"srv:{server_id}",
+                    "Автоклик требует привязки к Remnawave-хосту",
+                    [(f"Привязка сервера #{server_id}", f"bindings.json → запись с h1cloud_server_id={server_id}: remnawave_host_uuid")],
+                )
+                return
 
     if data == "balance":
         account = ctx.h1client.account()

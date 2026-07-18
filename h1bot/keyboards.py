@@ -1,17 +1,17 @@
-"""Билдеры инлайн-клавиатур. Каждое меню собирается динамически — пункты,
-для которых не хватает кредов/привязок, просто не появляются (деградация
-функционала вместо падения)."""
+"""Билдеры инлайн-клавиатур. Все пункты меню показываются всегда, независимо
+от того, заполнены ли под них креды/привязки — если данных не хватает,
+обработчик в handlers.py при нажатии покажет, что именно и в каком файле
+нужно дозаполнить, вместо того чтобы прятать кнопку."""
 from .telegram import button, keyboard
 
 
 def kb_main_menu(config) -> dict:
-    rows = []
-    if config.h1cloud_client_enabled:
-        rows.append([button("📋 Мои серверы", "srv_list")])
-        rows.append([button("💰 Баланс", "balance")])
-    if config.h1cloud_pelican_enabled:
-        rows.append([button("🗄 Pelican-панель (устаревший API)", "pelican_list")])
-    rows.append([button("📖 Помощь", "help")])
+    rows = [
+        [button("📋 Мои серверы", "srv_list")],
+        [button("💰 Баланс", "balance")],
+        [button("🗄 Pelican-панель (устаревший API)", "pelican_list")],
+        [button("📖 Помощь", "help")],
+    ]
     return keyboard(rows)
 
 
@@ -26,28 +26,22 @@ def kb_server_list(servers: list) -> dict:
 
 
 def kb_server_detail(config, server_id: int) -> dict:
+    from . import channel_watch
+
+    state_on = channel_watch.autoclick_enabled(server_id)
+    autoclick_label = "🟢 Автоклик при восстановлении: ВКЛ" if state_on else "🔴 Автоклик при восстановлении: ВЫКЛ"
+
     rows = [
         [button("▶️ Start", f"pwr:{server_id}:start"), button("⏸ Stop", f"pwr:{server_id}:stop"), button("🔄 Restart", f"pwr:{server_id}:restart")],
         [button("🧬 Обновить ядро Xray", f"xray_ask:{server_id}")],
         [button("💳 Продлить на 30 дней", f"renew_ask:{server_id}")],
+        [button("🌐 Проверить/применить CDN-домен", f"sync_check:{server_id}")],
+        [button("🩺 Диагностика", f"diag:{server_id}")],
+        [button("🔑 Перевыпустить REALITY-ключи", f"regen_ask:{server_id}")],
+        [button("📥 Применить перевыпущенный ключ", f"apply_ask:{server_id}")],
+        [button("🌐 Создать новый конфиг (в панели)", f"newcfg_ask:{server_id}")],
+        [button(autoclick_label, f"autoclick_toggle:{server_id}")],
     ]
-
-    binding = config.binding_for(server_id)
-    if binding and binding.gateway_sync_enabled:
-        rows.append([button("🌐 Проверить/применить CDN-домен", f"sync_check:{server_id}")])
-        rows.append([button("🩺 Диагностика", f"diag:{server_id}")])
-    if binding and binding.reality_apply_enabled:
-        rows.append([button("🔑 Перевыпустить REALITY-ключи", f"regen_ask:{server_id}")])
-        rows.append([button("📥 Применить перевыпущенный ключ", f"apply_ask:{server_id}")])
-
-    if config.browser_automation_enabled:
-        rows.append([button("🌐 Создать новый конфиг (в панели)", f"newcfg_ask:{server_id}")])
-        if binding and binding.gateway_sync_enabled:
-            from . import channel_watch
-            state_on = channel_watch.autoclick_enabled(server_id)
-            label = "🟢 Автоклик при восстановлении: ВКЛ" if state_on else "🔴 Автоклик при восстановлении: ВЫКЛ"
-            rows.append([button(label, f"autoclick_toggle:{server_id}")])
-
     rows.append(kb_back("srv_list"))
     return keyboard(rows)
 
